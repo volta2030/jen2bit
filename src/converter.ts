@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Logger } from './logger';
+import { JENKINS_TO_BITBUCKET } from './env-map';
 
 interface Stage {
   name: string;
@@ -16,6 +17,40 @@ export interface ConvertOptions {
   input: string;
   output: string;
   runners?: string[];
+}
+
+/**
+ * Mapping from Jenkins built-in env vars to Bitbucket Pipelines equivalents.
+ * Source: Jenkins Pipeline docs + Bitbucket Pipelines default variables docs.
+ */
+const ENV_VAR_MAP = JENKINS_TO_BITBUCKET;
+
+/**
+ * Replaces Jenkins env var references in a command string with Bitbucket equivalents.
+ * Handles: ${env.VAR}, $env.VAR, ${VAR}, $VAR (for known Jenkins built-ins).
+ * Windows mode uses $env:VAR syntax, Linux uses $VAR.
+ */
+function mapEnvVars(cmd: string, isWindows: boolean): string {
+  // Replace ${env.VAR_NAME} and $env.VAR_NAME
+  cmd = cmd.replace(/\$\{env\.([A-Z_]+)\}|\$env\.([A-Z_]+)/g, (_match, v1, v2) => {
+    const key = v1 ?? v2;
+    return resolveEnvRef(key, isWindows);
+  });
+
+  // Replace ${VAR_NAME} for known Jenkins built-ins
+  cmd = cmd.replace(/\$\{([A-Z_]+)\}/g, (_match, key) => {
+    if (key in ENV_VAR_MAP) return resolveEnvRef(key, isWindows);
+    return _match;
+  });
+
+  return cmd;
+}
+
+function resolveEnvRef(jenkinsVar: string, isWindows: boolean): string {
+  const mapped = ENV_VAR_MAP[jenkinsVar];
+  if (mapped === undefined) return isWindows ? `$env:${jenkinsVar}` : `$${jenkinsVar}`;
+  if (mapped === '') return `# [no Bitbucket equivalent for ${jenkinsVar}]`;
+  return isWindows ? `$env:${mapped}` : `$${mapped}`;
 }
 
 /**
@@ -136,7 +171,7 @@ function convertStageBody(body: string, isWindows: boolean): string[] {
   }
 
   allMatches.sort((a, b) => a.index - b.index);
-  return allMatches.map((m) => m.cmd);
+  return allMatches.map((m) => mapEnvVars(m.cmd, isWindows));
 }
 
 /**

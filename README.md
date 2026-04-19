@@ -4,7 +4,7 @@
 
 ### What is jen2bit
 
-> npm package for cli jenkinsfile to bitbucket-pipeline .yml file
+> A CLI for Jenkinsfile to bitbucket-pipeline.yml
 
 ### Install
 
@@ -18,7 +18,7 @@ npm install -g jen2bit
 
 ##### descriptions
 
-- Convert Jenkins file to bitbucket pipeline yml file
+- Convert Jenkinsfile to bitbucket-pipelines.yml
 
 ##### grammars
 
@@ -54,3 +54,25 @@ jen2bit convert Jenkinsfile -o my-pipeline.yml
 ```
 bitbucket-pipelines.yml
 ```
+
+
+#### invert
+
+##### descriptions
+
+- Invert bitbucket-pipelines.yml to Jenkinsfile
+
+##### grammars
+
+```
+jen2bit invert [bitbucket-pipelines.yml] [options]
+```
+
+##### options
+
+### Dependencies
+
+| package | description |
+|---------|-------------|
+| `commander` | CLI framework for parsing commands and options |
+| `js-yaml` | YAML parser used to read `bitbucket-pipelines.yml` in the `invert` command |
