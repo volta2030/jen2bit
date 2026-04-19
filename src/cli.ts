@@ -11,7 +11,7 @@ const program = new Command();
 program
   .name('jen2bit')
   .description('Convert Jenkinsfile to Bitbucket Pipelines YAML')
-  .version('1.0.0');
+  .version('0.1.0');
 
 program
   .command('convert [jenkinsfile]')
