@@ -85,11 +85,11 @@ function getBalancedBlock(text: string, startIndex: number): BalancedBlock | nul
 function convertStageBody(body: string, isWindows: boolean): string[] {
   const allMatches: Array<{ index: number; cmd: string }> = [];
 
-  // dir('path') { deleteDir() }
+  // dir('path') or dir("path") { deleteDir() }
   // Windows: if exist path rd /s /q path
   // Linux:   rm -rf path
   const dirDeletePattern =
-    /dir\s*\(\s*'([^']+)'\s*\)\s*\{[^}]*deleteDir\s*\(\s*\)[^}]*\}/gs;
+    /dir\s*\(\s*["']([^"']+)["']\s*\)\s*\{[^}]*deleteDir\s*\(\s*\)[^}]*\}/gs;
   for (const m of body.matchAll(dirDeletePattern)) {
     let cmd: string;
     if (isWindows) {
@@ -101,26 +101,26 @@ function convertStageBody(body: string, isWindows: boolean): string[] {
     allMatches.push({ index: m.index!, cmd });
   }
 
-  // dotnetBuild project: 'proj', optionsString: 'opts'
+  // dotnetBuild project: 'proj' or "proj", optionsString: 'opts' or "opts"
   const dotnetBuildPattern =
-    /dotnetBuild\s+project:\s*'([^']+)'(?:\s*,\s*optionsString\s*:\s*'([^']*)')?/g;
+    /dotnetBuild\s+project:\s*["']([^"']+)["'](?:\s*,\s*optionsString\s*:\s*["']([^"']*)["'])?/g;
   for (const m of body.matchAll(dotnetBuildPattern)) {
     const proj = m[1];
     const opts = m[2] ? ` ${m[2]}` : '';
     allMatches.push({ index: m.index!, cmd: `dotnet build ${proj}${opts}` });
   }
 
-  // dotnetTest project: 'proj', optionsString: 'opts'
+  // dotnetTest project: 'proj' or "proj", optionsString: 'opts' or "opts"
   const dotnetTestPattern =
-    /dotnetTest\s+project:\s*'([^']+)'(?:\s*,\s*optionsString\s*:\s*'([^']*)')?/g;
+    /dotnetTest\s+project:\s*["']([^"']+)["'](?:\s*,\s*optionsString\s*:\s*["']([^"']*)["'])?/g;
   for (const m of body.matchAll(dotnetTestPattern)) {
     const proj = m[1];
     const opts = m[2] ? ` ${m[2]}` : '';
     allMatches.push({ index: m.index!, cmd: `dotnet test ${proj}${opts}` });
   }
 
-  // bat 'command' — Windows CMD only
-  const batPattern = /bat\s+'([^']+)'/g;
+  // bat 'command' or bat "command" — Windows CMD only
+  const batPattern = /bat\s+["']([^"']+)["']/g;
   for (const m of body.matchAll(batPattern)) {
     if (isWindows) {
       allMatches.push({ index: m.index!, cmd: m[1] });
@@ -196,27 +196,27 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   const content = fs.readFileSync(resolvedInput, 'utf-8');
   logger.log(`Jenkinsfile loaded. Length: ${content.length} characters`);
 
-  // Extract environment variables
+  // Extract environment variables (single or double quotes, skip credentials() calls)
   const envVars: Record<string, string> = {};
   const envMatch = content.match(/environment\s*\{([\s\S]*?)\}/);
   if (envMatch) {
-    for (const m of envMatch[1].matchAll(/(\w+)\s*=\s*'([^']*)'/g)) {
+    for (const m of envMatch[1].matchAll(/(\w+)\s*=\s*["']([^"']*)["']/g)) {
       envVars[m[1]] = m[2];
     }
     logger.log(`Environment variables found: ${Object.keys(envVars).length}`);
   }
 
-  // Extract agent label
+  // Extract agent label (single or double quotes)
   let agentLabel = '';
-  const agentMatch = content.match(/label\s+'([^']+)'/);
+  const agentMatch = content.match(/label\s+["']([^"']+)["']/);
   if (agentMatch) {
     agentLabel = agentMatch[1];
     logger.log(`Agent label: ${agentLabel}`);
   }
 
-  // Extract stages using balanced brace matching
+  // Extract stages using balanced brace matching (single or double quotes)
   const stages: Stage[] = [];
-  const stageHeaderPattern = /stage\s*\(\s*'([^']+)'\s*\)/g;
+  const stageHeaderPattern = /stage\s*\(\s*["']([^"']+)["']\s*\)/g;
   for (const hdr of content.matchAll(stageHeaderPattern)) {
     const stageName = hdr[1];
     const block = getBalancedBlock(content, hdr.index!);
