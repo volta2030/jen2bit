@@ -98,7 +98,7 @@ function invertCommand(cmd: string, isWindows: boolean): string | null {
  * Windows: $env:BITBUCKET_VAR -> ${env.JENKINS_VAR}
  * Linux:   $BITBUCKET_VAR     -> ${env.JENKINS_VAR}
  */
-function reversEnvVars(cmd: string, isWindows: boolean): string {
+function reverseEnvVars(cmd: string, isWindows: boolean): string {
   if (isWindows) {
     // $env:BITBUCKET_VAR
     return cmd.replace(/\$env:([A-Z_]+)/g, (_match, bbVar) => {
