@@ -64,10 +64,10 @@ function invertCommand(cmd: string, isWindows: boolean): string | null {
   if (rmMatch) return `dir('${rmMatch[1]}') { deleteDir() }`;
 
   // Reverse set KEY=VALUE (Windows env) — skip, these come from Jenkins environment block
-  if (/^set [A-Z_]+=/.test(cmd)) return null;
+  if (/^set [A-Za-z_][A-Za-z0-9_]*=/.test(cmd)) return null;
 
   // Reverse export KEY=VALUE (Linux env) — skip, these come from Jenkins environment block
-  if (/^export [A-Z_]+=/.test(cmd)) return null;
+  if (/^export [A-Za-z_][A-Za-z0-9_]*=/.test(cmd)) return null;
 
   // Reverse dotnet build -> dotnetBuild
   const dotnetBuildMatch = cmd.match(/^dotnet build (.+?)(\s+--.+)?$/);
