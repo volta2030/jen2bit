@@ -1,3 +1,7 @@
+[![npm version](https://img.shields.io/npm/v/jen2bit)](https://www.npmjs.com/package/jen2bit)
+[![npm downloads](https://img.shields.io/npm/dm/jen2bit)](https://www.npmjs.com/package/jen2bit)
+[![license](https://img.shields.io/npm/l/jen2bit)](https://www.npmjs.com/package/jen2bit)
+
 ### What is jen2bit
 
 > npm package for cli jenkinsfile to bitbucket-pipeline .yml file
