@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Logger } from './logger';
+import { JENKINS_TO_BITBUCKET } from './env-map';
 
 interface Stage {
   name: string;
@@ -16,6 +17,40 @@ export interface ConvertOptions {
   input: string;
   output: string;
   runners?: string[];
+}
+
+/**
+ * Mapping from Jenkins built-in env vars to Bitbucket Pipelines equivalents.
+ * Source: Jenkins Pipeline docs + Bitbucket Pipelines default variables docs.
+ */
+const ENV_VAR_MAP = JENKINS_TO_BITBUCKET;
+
+/**
+ * Replaces Jenkins env var references in a command string with Bitbucket equivalents.
+ * Handles: ${env.VAR}, $env.VAR, ${VAR}, $VAR (for known Jenkins built-ins).
+ * Windows mode uses $env:VAR syntax, Linux uses $VAR.
+ */
+function mapEnvVars(cmd: string, isWindows: boolean): string {
+  // Replace ${env.VAR_NAME} and $env.VAR_NAME
+  cmd = cmd.replace(/\$\{env\.([A-Z_]+)\}|\$env\.([A-Z_]+)/g, (_match, v1, v2) => {
+    const key = v1 ?? v2;
+    return resolveEnvRef(key, isWindows);
+  });
+
+  // Replace ${VAR_NAME} for known Jenkins built-ins
+  cmd = cmd.replace(/\$\{([A-Z_]+)\}/g, (_match, key) => {
+    if (key in ENV_VAR_MAP) return resolveEnvRef(key, isWindows);
+    return _match;
+  });
+
+  return cmd;
+}
+
+function resolveEnvRef(jenkinsVar: string, isWindows: boolean): string {
+  const mapped = ENV_VAR_MAP[jenkinsVar];
+  if (mapped === undefined) return isWindows ? `$env:${jenkinsVar}` : `$${jenkinsVar}`;
+  if (mapped === '') return `# [no Bitbucket equivalent for ${jenkinsVar}]`;
+  return isWindows ? `$env:${mapped}` : `$${mapped}`;
 }
 
 /**
@@ -44,52 +79,73 @@ function getBalancedBlock(text: string, startIndex: number): BalancedBlock | nul
 /**
  * Extracts shell/batch commands from a Jenkins stage body block.
  * Supports: dir+deleteDir, dotnetBuild, dotnetTest, bat, sh (single & multi-line).
+ * OS-aware: bat is Windows-only, sh is Linux-only, dir+deleteDir differs per OS.
+ * isWindows is derived from runner labels: any label containing 'windows' -> Windows mode.
  */
-function convertStageBody(body: string): string[] {
+function convertStageBody(body: string, isWindows: boolean): string[] {
   const allMatches: Array<{ index: number; cmd: string }> = [];
 
-  // dir('path') { deleteDir() } -> if exist path rd /s /q path
+  // dir('path') or dir("path") { deleteDir() }
+  // Windows: if exist path rd /s /q path
+  // Linux:   rm -rf path
   const dirDeletePattern =
-    /dir\s*\(\s*'([^']+)'\s*\)\s*\{[^}]*deleteDir\s*\(\s*\)[^}]*\}/gs;
+    /dir\s*\(\s*["']([^"']+)["']\s*\)\s*\{[^}]*deleteDir\s*\(\s*\)[^}]*\}/gs;
   for (const m of body.matchAll(dirDeletePattern)) {
-    const dirPath = m[1].replace(/\//g, '\\');
-    allMatches.push({
-      index: m.index!,
-      cmd: `if exist ${dirPath} rd /s /q ${dirPath}`,
-    });
+    let cmd: string;
+    if (isWindows) {
+      const dirPath = m[1].replace(/\//g, '\\');
+      cmd = `if exist ${dirPath} rd /s /q ${dirPath}`;
+    } else {
+      cmd = `rm -rf ${m[1]}`;
+    }
+    allMatches.push({ index: m.index!, cmd });
   }
 
-  // dotnetBuild project: 'proj', optionsString: 'opts'
+  // dotnetBuild project: 'proj' or "proj", optionsString: 'opts' or "opts"
   const dotnetBuildPattern =
-    /dotnetBuild\s+project:\s*'([^']+)'(?:\s*,\s*optionsString\s*:\s*'([^']*)')?/g;
+    /dotnetBuild\s+project:\s*["']([^"']+)["'](?:\s*,\s*optionsString\s*:\s*["']([^"']*)["'])?/g;
   for (const m of body.matchAll(dotnetBuildPattern)) {
     const proj = m[1];
     const opts = m[2] ? ` ${m[2]}` : '';
     allMatches.push({ index: m.index!, cmd: `dotnet build ${proj}${opts}` });
   }
 
-  // dotnetTest project: 'proj', optionsString: 'opts'
+  // dotnetTest project: 'proj' or "proj", optionsString: 'opts' or "opts"
   const dotnetTestPattern =
-    /dotnetTest\s+project:\s*'([^']+)'(?:\s*,\s*optionsString\s*:\s*'([^']*)')?/g;
+    /dotnetTest\s+project:\s*["']([^"']+)["'](?:\s*,\s*optionsString\s*:\s*["']([^"']*)["'])?/g;
   for (const m of body.matchAll(dotnetTestPattern)) {
     const proj = m[1];
     const opts = m[2] ? ` ${m[2]}` : '';
     allMatches.push({ index: m.index!, cmd: `dotnet test ${proj}${opts}` });
   }
 
-  // bat 'command'
-  const batPattern = /bat\s+'([^']+)'/g;
+  // bat 'command' or bat "command" — Windows CMD only
+  const batPattern = /bat\s+["']([^"']+)["']/g;
   for (const m of body.matchAll(batPattern)) {
-    allMatches.push({ index: m.index!, cmd: m[1] });
+    if (isWindows) {
+      allMatches.push({ index: m.index!, cmd: m[1] });
+    } else {
+      allMatches.push({
+        index: m.index!,
+        cmd: `# [skipped: bat is Windows-only] ${m[1]}`,
+      });
+    }
   }
 
-  // sh 'command' or sh "command"  (single line)
+  // sh 'command' or sh "command" (single line) — Linux/Unix only
   const shPattern = /sh\s+["']([^"'\n]+)["']/g;
   for (const m of body.matchAll(shPattern)) {
-    allMatches.push({ index: m.index!, cmd: m[1] });
+    if (!isWindows) {
+      allMatches.push({ index: m.index!, cmd: m[1] });
+    } else {
+      allMatches.push({
+        index: m.index!,
+        cmd: `# [skipped: sh is Linux-only] ${m[1]}`,
+      });
+    }
   }
 
-  // sh(""" ... """) or sh(''' ... ''')  (multi-line)
+  // sh(""" ... """) or sh(''' ... ''')  (multi-line) — Linux/Unix only
   const shMultiPattern =
     /sh\s*\(\s*(?:"""([\s\S]*?)"""|'''([\s\S]*?)''')\s*\)/g;
   for (const m of body.matchAll(shMultiPattern)) {
@@ -98,17 +154,24 @@ function convertStageBody(body: string): string[] {
     for (const line of raw.split('\n')) {
       const trimmed = line.trim();
       if (trimmed) {
-        allMatches.push({
-          index: first ? m.index! : m.index! + 1,
-          cmd: trimmed,
-        });
+        if (!isWindows) {
+          allMatches.push({
+            index: first ? m.index! : m.index! + 1,
+            cmd: trimmed,
+          });
+        } else {
+          allMatches.push({
+            index: first ? m.index! : m.index! + 1,
+            cmd: `# [skipped: sh is Linux-only] ${trimmed}`,
+          });
+        }
         first = false;
       }
     }
   }
 
   allMatches.sort((a, b) => a.index - b.index);
-  return allMatches.map((m) => m.cmd);
+  return allMatches.map((m) => mapEnvVars(m.cmd, isWindows));
 }
 
 /**
@@ -116,7 +179,12 @@ function convertStageBody(body: string): string[] {
  */
 export function convert(options: ConvertOptions, logger: Logger): void {
   const startTime = new Date();
+  // Determine OS from runner labels: any label containing 'windows' -> Windows mode, otherwise Linux
+  const isWindows = options.runners
+    ? options.runners.some((r) => r.toLowerCase().includes('windows'))
+    : false; // default: Linux when no runner specified
   logger.log('=== Conversion Started ===');
+  logger.log(`Target OS: ${isWindows ? 'windows' : 'linux'} (detected from runner labels)`);
 
   const resolvedInput = path.resolve(options.input);
   const resolvedOutput = path.resolve(options.output);
@@ -128,32 +196,32 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   const content = fs.readFileSync(resolvedInput, 'utf-8');
   logger.log(`Jenkinsfile loaded. Length: ${content.length} characters`);
 
-  // Extract environment variables
+  // Extract environment variables (single or double quotes, skip credentials() calls)
   const envVars: Record<string, string> = {};
   const envMatch = content.match(/environment\s*\{([\s\S]*?)\}/);
   if (envMatch) {
-    for (const m of envMatch[1].matchAll(/(\w+)\s*=\s*'([^']*)'/g)) {
+    for (const m of envMatch[1].matchAll(/(\w+)\s*=\s*["']([^"']*)["']/g)) {
       envVars[m[1]] = m[2];
     }
     logger.log(`Environment variables found: ${Object.keys(envVars).length}`);
   }
 
-  // Extract agent label
+  // Extract agent label (single or double quotes)
   let agentLabel = '';
-  const agentMatch = content.match(/label\s+'([^']+)'/);
+  const agentMatch = content.match(/label\s+["']([^"']+)["']/);
   if (agentMatch) {
     agentLabel = agentMatch[1];
     logger.log(`Agent label: ${agentLabel}`);
   }
 
-  // Extract stages using balanced brace matching
+  // Extract stages using balanced brace matching (single or double quotes)
   const stages: Stage[] = [];
-  const stageHeaderPattern = /stage\s*\(\s*'([^']+)'\s*\)/g;
+  const stageHeaderPattern = /stage\s*\(\s*["']([^"']+)["']\s*\)/g;
   for (const hdr of content.matchAll(stageHeaderPattern)) {
     const stageName = hdr[1];
     const block = getBalancedBlock(content, hdr.index!);
     if (block) {
-      const commands = convertStageBody(block.content);
+      const commands = convertStageBody(block.content, isWindows);
       stages.push({ name: stageName, commands });
       logger.log(`Stage '${stageName}': ${commands.length} command(s) extracted`);
       for (const cmd of commands) {
@@ -182,6 +250,7 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   lines.push('# Auto-converted from Jenkinsfile');
   lines.push(`# Date: ${dateStr}`);
   lines.push(`# Original agent: ${agentLabel}`);
+  lines.push(`# Target OS: ${isWindows ? 'windows' : 'linux'}`);
   lines.push('');
 
   if (runners) {
@@ -203,7 +272,11 @@ export function convert(options: ConvertOptions, logger: Logger): void {
     lines.push('        script:');
 
     for (const [key, val] of Object.entries(envVars)) {
-      lines.push(`          - set ${key}=${val}`);
+      if (isWindows) {
+        lines.push(`          - set ${key}=${val}`);
+      } else {
+        lines.push(`          - export ${key}=${val}`);
+      }
     }
 
     if (stage.commands.length > 0) {
