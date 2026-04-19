@@ -50,7 +50,7 @@ function invertCommand(cmd: string, isWindows: boolean): string | null {
   if (/^echo 'TODO: Add commands/.test(cmd)) return null;
 
   // Reverse env var references
-  cmd = reversEnvVars(cmd, isWindows);
+  cmd = reverseEnvVars(cmd, isWindows);
 
   // Reverse Windows dir-delete: if exist path rd /s /q path -> dir('path') { deleteDir() }
   const rdMatch = cmd.match(/^if exist (.+?) rd \/s \/q .+$/);
