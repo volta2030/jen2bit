@@ -27,7 +27,7 @@ jen2bit convert [Jenkinsfile] [options]
 | option | description | default |
 |--------|-------------|---------|
 | `-o, --output <file>` | Output file path | `bitbucket-pipelines.yml` |
-| `-r, --runner <runners...>` | Runner labels for `default-runner` | `self.hosted windows` |
+| `-r, --runner <runners...>` | Runner labels for `default-runner` | - |
 
 ##### examples
 
