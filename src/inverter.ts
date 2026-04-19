@@ -147,7 +147,7 @@ export function invert(options: InvertOptions, logger: Logger): void {
   const envVars: Record<string, string> = {};
   for (const wrapper of defaultSteps) {
     for (const cmd of wrapper.step?.script ?? []) {
-      const setMatch = cmd.match(/^(?:set|export) ([A-Z_]+)=(.*)$/);
+      const setMatch = cmd.match(/^(?:set|export) ([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
       if (setMatch) envVars[setMatch[1]] = setMatch[2];
     }
   }
