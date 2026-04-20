@@ -70,6 +70,14 @@ jen2bit invert [bitbucket-pipelines.yml] [options]
 
 ##### options
 
+### Versioning
+
+```
+major.minor.patch
+```
+- minor : Add or Delete commands
+- patch : Edit commands 
+
 ### Dependencies
 
 | package | description |
