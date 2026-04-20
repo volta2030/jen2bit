@@ -7,12 +7,16 @@ import { convert } from './converter';
 import { invert } from './inverter';
 import { Logger } from './logger';
 
+const { version } = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf-8')
+);
+
 const program = new Command();
 
 program
   .name('jen2bit')
   .description('Convert Jenkinsfile to Bitbucket Pipelines YAML')
-  .version('0.2.1');
+  .version(version);
 
 program
   .command('convert [jenkinsfile]')
