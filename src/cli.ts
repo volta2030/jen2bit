@@ -18,7 +18,7 @@ program
   .command('convert [jenkinsfile]')
   .description('Convert Jenkins file to Bitbucket Pipeline yml file')
   .option('-o, --output <file>', 'Output file path', 'bitbucket-pipelines.yml')
-  .option('-r, --runner <runners...>', 'Runner labels for default-runner')
+  .option('-r, --runner <runners...>', 'Runner labels for generated runs-on entries in each step')
   .option('-a, --all', 'Merge all stages into a single step')
   .action((jenkinsfile: string = 'Jenkinsfile', options: { output: string; runner?: string[]; all?: boolean }) => {
     const logger = new Logger();
