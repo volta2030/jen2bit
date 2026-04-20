@@ -32,6 +32,7 @@ jen2bit convert [Jenkinsfile] [options]
 |--------|-------------|---------|
 | `-o, --output <file>` | Output file path | `bitbucket-pipelines.yml` |
 | `-r, --runner <runners...>` | Runner labels added as `runs-on` in each step. Labels containing `windows` → Windows mode, otherwise Linux mode | - |
+| `-a, --all` | Merge all stages into a single step | - |
 
 ##### examples
 
@@ -44,6 +45,12 @@ jen2bit convert Jenkinsfile -r self.hosted linux
 
 # Windows self-hosted runner
 jen2bit convert Jenkinsfile -r self.hosted windows
+
+# Merge all stages into a single step
+jen2bit convert Jenkinsfile -a
+
+# Combine with runner
+jen2bit convert Jenkinsfile -a -r self.hosted linux
 
 # Specify output file
 jen2bit convert Jenkinsfile -o my-pipeline.yml
@@ -70,7 +77,28 @@ jen2bit invert [bitbucket-pipelines.yml] [options]
 
 ##### options
 
-### Versioning
+| option | description | default |
+|--------|-------------|---------|
+| `-o, --output <file>` | Output file path | `Jenkinsfile` |
+
+##### examples
+
+```bash
+# Default (reads bitbucket-pipelines.yml, outputs Jenkinsfile)
+jen2bit invert
+
+# Specify input file
+jen2bit invert my-pipeline.yml
+
+# Specify output file
+jen2bit invert bitbucket-pipelines.yml -o MyJenkinsfile
+```
+
+##### output
+
+```
+Jenkinsfile
+```
 
 ```
 major.minor.patch

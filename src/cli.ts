@@ -19,13 +19,14 @@ program
   .description('Convert Jenkins file to Bitbucket Pipeline yml file')
   .option('-o, --output <file>', 'Output file path', 'bitbucket-pipelines.yml')
   .option('-r, --runner <runners...>', 'Runner labels for default-runner')
-  .action((jenkinsfile: string = 'Jenkinsfile', options: { output: string; runner?: string[] }) => {
+  .option('-a, --all', 'Merge all stages into a single step')
+  .action((jenkinsfile: string = 'Jenkinsfile', options: { output: string; runner?: string[]; all?: boolean }) => {
     const logger = new Logger();
     const inputPath = path.resolve(process.cwd(), jenkinsfile);
     const outputPath = path.resolve(process.cwd(), options.output);
 
     try {
-      convert({ input: inputPath, output: outputPath, runners: options.runner }, logger);
+      convert({ input: inputPath, output: outputPath, runners: options.runner, all: options.all }, logger);
 
       const logPath = path.resolve(process.cwd(), 'conversion.log');
       fs.writeFileSync(logPath, logger.getLines().join('\n') + '\n', 'utf-8');

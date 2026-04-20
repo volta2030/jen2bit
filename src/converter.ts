@@ -17,6 +17,7 @@ export interface ConvertOptions {
   input: string;
   output: string;
   runners?: string[];
+  all?: boolean;
 }
 
 /**
@@ -256,9 +257,10 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   lines.push('pipelines:');
   lines.push('  default:');
 
-  for (const stage of stages) {
+  if (options.all) {
+    // Merge all stages into a single step
     lines.push('    - step:');
-    lines.push(`        name: ${stage.name}`);
+    lines.push('        name: All Stages');
     if (runners) {
       lines.push('        runs-on:');
       for (const r of runners) {
@@ -275,24 +277,65 @@ export function convert(options: ConvertOptions, logger: Logger): void {
       }
     }
 
-    if (stage.commands.length > 0) {
-      for (const cmd of stage.commands) {
-        const cmdLines = cmd.split('\n');
-        if (cmdLines.length === 1) {
-          lines.push(`          - ${cmd}`);
-        } else {
-          lines.push('          - |');
-          for (const line of cmdLines) {
-            const trimmed = line.trim();
-            if (trimmed) lines.push(`            ${trimmed}`);
+    for (const stage of stages) {
+      lines.push(`          - echo '--- Stage: ${stage.name} ---'`);
+      if (stage.commands.length > 0) {
+        for (const cmd of stage.commands) {
+          const cmdLines = cmd.split('\n');
+          if (cmdLines.length === 1) {
+            lines.push(`          - ${cmd}`);
+          } else {
+            lines.push('          - |');
+            for (const line of cmdLines) {
+              const trimmed = line.trim();
+              if (trimmed) lines.push(`            ${trimmed}`);
+            }
           }
         }
+      } else {
+        lines.push(`          - echo 'TODO: Add commands for ${stage.name}'`);
       }
-    } else {
-      lines.push(`          - echo 'TODO: Add commands for ${stage.name}'`);
     }
-
     lines.push('');
+  } else {
+    for (const stage of stages) {
+      lines.push('    - step:');
+      lines.push(`        name: ${stage.name}`);
+      if (runners) {
+        lines.push('        runs-on:');
+        for (const r of runners) {
+          lines.push(`          - ${r}`);
+        }
+      }
+      lines.push('        script:');
+
+      for (const [key, val] of Object.entries(envVars)) {
+        if (isWindows) {
+          lines.push(`          - set ${key}=${val}`);
+        } else {
+          lines.push(`          - export ${key}=${val}`);
+        }
+      }
+
+      if (stage.commands.length > 0) {
+        for (const cmd of stage.commands) {
+          const cmdLines = cmd.split('\n');
+          if (cmdLines.length === 1) {
+            lines.push(`          - ${cmd}`);
+          } else {
+            lines.push('          - |');
+            for (const line of cmdLines) {
+              const trimmed = line.trim();
+              if (trimmed) lines.push(`            ${trimmed}`);
+            }
+          }
+        }
+      } else {
+        lines.push(`          - echo 'TODO: Add commands for ${stage.name}'`);
+      }
+
+      lines.push('');
+    }
   }
 
   lines.push('  branches:');
