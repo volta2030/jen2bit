@@ -253,22 +253,18 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   lines.push(`# Target OS: ${isWindows ? 'windows' : 'linux'}`);
   lines.push('');
 
-  if (runners) {
-    lines.push(`# Runner: ${runners.join(', ')}`);
-    lines.push('options:');
-    lines.push('  default-runner:');
-    for (const r of runners) {
-      lines.push(`    - ${r}`);
-    }
-    lines.push('');
-  }
-
   lines.push('pipelines:');
   lines.push('  default:');
 
   for (const stage of stages) {
     lines.push('    - step:');
     lines.push(`        name: ${stage.name}`);
+    if (runners) {
+      lines.push('        runs-on:');
+      for (const r of runners) {
+        lines.push(`          - ${r}`);
+      }
+    }
     lines.push('        script:');
 
     for (const [key, val] of Object.entries(envVars)) {

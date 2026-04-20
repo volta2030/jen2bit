@@ -31,15 +31,15 @@ jen2bit convert [Jenkinsfile] [options]
 | option | description | default |
 |--------|-------------|---------|
 | `-o, --output <file>` | Output file path | `bitbucket-pipelines.yml` |
-| `-r, --runner <runners...>` | Runner labels for `default-runner`. Labels containing `windows` → Windows mode, otherwise Linux mode | - |
+| `-r, --runner <runners...>` | Runner labels added as `runs-on` in each step. Labels containing `windows` → Windows mode, otherwise Linux mode | - |
 
 ##### examples
 
 ```bash
-# Use default runner (defaults to Linux mode)
+# No runner specified (Linux mode, no runs-on)
 jen2bit convert Jenkinsfile
 
-# Linux runner (auto-detected from label)
+# Linux self-hosted runner
 jen2bit convert Jenkinsfile -r self.hosted linux
 
 # Windows self-hosted runner

@@ -44,7 +44,7 @@ pipelines:
 
 interface BitbucketPipeline {
   pipelines?: {
-    default?: Array<{ step?: { name?: string; script?: string[] } }>;
+    default?: Array<{ step?: { name?: string; script?: string[]; 'runs-on'?: string[] } }>;
   };
 }
 
@@ -91,6 +91,33 @@ describe('convert: Jenkinsfile -> bitbucket-pipelines.yml', () => {
   test('output YAML contains auto-conversion header', () => {
     const content = fs.readFileSync(output, 'utf-8');
     expect(content).toContain('# Auto-converted from Jenkinsfile');
+  });
+
+  test('no runs-on when --runner is not specified', () => {
+    for (const wrapper of result.pipelines!.default!) {
+      expect(wrapper.step?.['runs-on']).toBeUndefined();
+    }
+  });
+});
+
+describe('convert: Jenkinsfile -> bitbucket-pipelines.yml with --runner', () => {
+  let result: BitbucketPipeline;
+
+  beforeAll(() => {
+    const input = writeTmp(JENKINSFILE, '');
+    const output = path.join(path.dirname(input), 'bitbucket-pipelines.yml');
+    convert({ input, output, runners: ['self.hosted', 'linux'] }, new Logger());
+    result = yaml.load(fs.readFileSync(output, 'utf-8')) as BitbucketPipeline;
+  });
+
+  test('runs-on is set on each step when --runner is specified', () => {
+    for (const wrapper of result.pipelines!.default!) {
+      expect(wrapper.step?.['runs-on']).toEqual(['self.hosted', 'linux']);
+    }
+  });
+
+  test('no top-level options block when using runs-on', () => {
+    expect((result as any).options).toBeUndefined();
   });
 });
 
