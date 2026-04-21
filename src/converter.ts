@@ -245,6 +245,10 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   const hasEmailNotify = /emailext\s*\(/.test(content);
   const hasPublishHTML = /publishHTML\s*\(/.test(content);
 
+  // Detect branch / PR conditions in Jenkinsfile
+  const hasBranchCondition = /when\s*\{[^}]*branch\s+["'][^"']+["'][^}]*\}/s.test(content);
+  const hasPRCondition = /when\s*\{[^}]*changeRequest[^}]*\}/s.test(content);
+
   // Detect Jenkins options
   const hasTimestamps = /options\s*\{[^}]*timestamps\s*\(\s*\)[^}]*\}/s.test(content);
   if (hasTimestamps) {
@@ -362,20 +366,25 @@ export function convert(options: ConvertOptions, logger: Logger): void {
     }
   }
 
-  lines.push('  branches:');
-  lines.push('    main:');
-  lines.push('      - step:');
-  lines.push('          name: Main Branch Build');
-  lines.push('          script:');
-  lines.push("            - echo 'Main branch pipeline'");
-  lines.push('');
-  lines.push('  pull-requests:');
-  lines.push("    '**':");
-  lines.push('      - step:');
-  lines.push('          name: PR Validation');
-  lines.push('          script:');
-  lines.push("            - echo 'PR validation pipeline'");
-  lines.push('');
+  if (hasBranchCondition) {
+    lines.push('  branches:');
+    lines.push('    main:');
+    lines.push('      - step:');
+    lines.push('          name: Main Branch Build');
+    lines.push('          script:');
+    lines.push("            - echo 'Main branch pipeline'");
+    lines.push('');
+  }
+
+  if (hasPRCondition) {
+    lines.push('  pull-requests:');
+    lines.push("    '**':");
+    lines.push('      - step:');
+    lines.push('          name: PR Validation');
+    lines.push('          script:');
+    lines.push("            - echo 'PR validation pipeline'");
+    lines.push('');
+  }
 
   if (hasEmailNotify || hasPublishHTML) {
     lines.push('# =============================================================');
