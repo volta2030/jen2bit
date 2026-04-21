@@ -252,7 +252,14 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   const hasPublishHTML = /publishHTML\s*\(/.test(content);
 
   // Detect branch / PR conditions in Jenkinsfile
-  const hasBranchCondition = /when\s*\{[^}]*branch\s+["'][^"']+["'][^}]*\}/s.test(content);
+  const branchConditionRegex = /when\s*\{[^}]*branch\s+["']([^"']+)["'][^}]*\}/gs;
+  const branchNames: string[] = [];
+  let branchMatch: RegExpExecArray | null;
+  while ((branchMatch = branchConditionRegex.exec(content)) !== null) {
+    const name = branchMatch[1];
+    if (!branchNames.includes(name)) branchNames.push(name);
+  }
+  const hasBranchCondition = branchNames.length > 0;
   const hasPRCondition = /when\s*\{[^}]*changeRequest[^}]*\}/s.test(content);
 
   // Detect globally active plugins
@@ -382,12 +389,14 @@ export function convert(options: ConvertOptions, logger: Logger): void {
 
   if (hasBranchCondition) {
     lines.push('  branches:');
-    lines.push('    main:');
-    lines.push('      - step:');
-    lines.push('          name: Main Branch Build');
-    lines.push('          script:');
-    lines.push("            - echo 'Main branch pipeline'");
-    lines.push('');
+    for (const branch of branchNames) {
+      lines.push(`    ${branch}:`);
+      lines.push('      - step:');
+      lines.push(`          name: ${branch} Branch Build`);
+      lines.push('          script:');
+      lines.push(`            - echo '${branch} branch pipeline'`);
+      lines.push('');
+    }
   }
 
   if (hasPRCondition) {
