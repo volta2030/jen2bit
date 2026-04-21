@@ -2,11 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Logger } from './logger';
 import { JENKINS_TO_BITBUCKET } from './env-map';
+import { plugins } from './plugins';
 
 interface Stage {
   name: string;
   commands: string[];
-  hasTimestampsWrapper: boolean;
+  /** Plugin names that are active for this specific stage */
+  activePlugins: Set<string>;
 }
 
 interface BalancedBlock {
@@ -85,8 +87,10 @@ function getBalancedBlock(text: string, startIndex: number): BalancedBlock | nul
  * isWindows is derived from runner labels: any label containing 'windows' -> Windows mode.
  */
 function convertStageBody(body: string, isWindows: boolean): string[] {
-  // Unwrap timestamps { ... } step wrapper — the block content is what matters
-  body = body.replace(/\btimestamps\s*\{([\s\S]*?)\}/g, (_match, inner) => inner);
+  // Apply plugin body transformations (e.g. unwrap DSL wrappers)
+  for (const plugin of plugins) {
+    body = plugin.transformStageBody(body);
+  }
 
   const allMatches: Array<{ index: number; cmd: string }> = [];
 
@@ -226,16 +230,18 @@ export function convert(options: ConvertOptions, logger: Logger): void {
     const stageName = hdr[1];
     const block = getBalancedBlock(content, hdr.index!);
     if (block) {
-      const hasTimestampsWrapper = /\btimestamps\s*\{/.test(block.content);
+      const activePlugins = new Set(
+        plugins.filter((p) => p.detectInStage(block.content)).map((p) => p.name)
+      );
       const commands = convertStageBody(block.content, isWindows);
-      stages.push({ name: stageName, commands, hasTimestampsWrapper });
+      stages.push({ name: stageName, commands, activePlugins });
       logger.log(`Stage '${stageName}': ${commands.length} command(s) extracted`);
       for (const cmd of commands) {
         logger.log(`  -> ${cmd}`);
       }
     } else {
       logger.log(`Stage '${stageName}': failed to parse block`, 'WARN');
-      stages.push({ name: stageName, commands: [], hasTimestampsWrapper: false });
+      stages.push({ name: stageName, commands: [], activePlugins: new Set() });
     }
   }
 
@@ -249,10 +255,12 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   const hasBranchCondition = /when\s*\{[^}]*branch\s+["'][^"']+["'][^}]*\}/s.test(content);
   const hasPRCondition = /when\s*\{[^}]*changeRequest[^}]*\}/s.test(content);
 
-  // Detect Jenkins options
-  const hasTimestamps = /options\s*\{[^}]*timestamps\s*\(\s*\)[^}]*\}/s.test(content);
-  if (hasTimestamps) {
-    logger.log('Jenkins option detected: timestamps() -> adding timestamp echo to each step');
+  // Detect globally active plugins
+  const globalPlugins = new Set(
+    plugins.filter((p) => p.detect(content)).map((p) => p.name)
+  );
+  for (const name of globalPlugins) {
+    logger.log(`Jenkins plugin detected: ${name} -> prepending script lines to each step`);
   }
 
   // Build YAML output
@@ -271,11 +279,6 @@ export function convert(options: ConvertOptions, logger: Logger): void {
 
   lines.push('pipelines:');
   lines.push('  default:');
-
-  // Timestamp echo command: printed at the start of each step's script when timestamps() is detected
-  const tsEcho = isWindows
-    ? 'powershell -Command "Write-Host \'[TIMESTAMP]\' (Get-Date -Format \'yyyy-MM-ddTHH:mm:ssZ\')"'
-    : "echo \"[TIMESTAMP] $(date -u '+%Y-%m-%dT%H:%M:%SZ')\"";
 
   if (options.all) {
     // Merge all stages into a single step
@@ -297,8 +300,14 @@ export function convert(options: ConvertOptions, logger: Logger): void {
       }
     }
 
-    if (hasTimestamps || stages.some((s) => s.hasTimestampsWrapper)) {
-      lines.push(`          - ${tsEcho}`);
+    // Prepend plugin lines when any stage or global activation applies
+    for (const plugin of plugins) {
+      const active = globalPlugins.has(plugin.name) || stages.some((s) => s.activePlugins.has(plugin.name));
+      if (active) {
+        for (const line of plugin.getPrependLines(isWindows)) {
+          lines.push(`          - ${line}`);
+        }
+      }
     }
 
     for (const stage of stages) {
@@ -341,8 +350,13 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         }
       }
 
-      if (hasTimestamps || stage.hasTimestampsWrapper) {
-        lines.push(`          - ${tsEcho}`);
+      // Prepend plugin lines when globally active or active for this stage
+      for (const plugin of plugins) {
+        if (globalPlugins.has(plugin.name) || stage.activePlugins.has(plugin.name)) {
+          for (const line of plugin.getPrependLines(isWindows)) {
+            lines.push(`          - ${line}`);
+          }
+        }
       }
 
       if (stage.commands.length > 0) {

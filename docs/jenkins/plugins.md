@@ -1,1 +1,0 @@
-### Timestamper : https://plugins.jenkins.io/timestamper/
