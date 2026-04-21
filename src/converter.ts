@@ -253,12 +253,12 @@ export function convert(options: ConvertOptions, logger: Logger): void {
 
   // Detect branch / PR conditions in Jenkinsfile
   const branchConditionRegex = /when\s*\{[^}]*branch\s+["']([^"']+)["'][^}]*\}/gs;
-  const branchNames: string[] = [];
+  const branchNameSet = new Set<string>();
   let branchMatch: RegExpExecArray | null;
   while ((branchMatch = branchConditionRegex.exec(content)) !== null) {
-    const name = branchMatch[1];
-    if (!branchNames.includes(name)) branchNames.push(name);
+    branchNameSet.add(branchMatch[1]);
   }
+  const branchNames = Array.from(branchNameSet);
   const hasBranchCondition = branchNames.length > 0;
   const hasPRCondition = /when\s*\{[^}]*changeRequest[^}]*\}/s.test(content);
 
