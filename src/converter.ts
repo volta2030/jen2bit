@@ -6,6 +6,7 @@ import { JENKINS_TO_BITBUCKET } from './env-map';
 interface Stage {
   name: string;
   commands: string[];
+  hasTimestampsWrapper: boolean;
 }
 
 interface BalancedBlock {
@@ -84,6 +85,9 @@ function getBalancedBlock(text: string, startIndex: number): BalancedBlock | nul
  * isWindows is derived from runner labels: any label containing 'windows' -> Windows mode.
  */
 function convertStageBody(body: string, isWindows: boolean): string[] {
+  // Unwrap timestamps { ... } step wrapper — the block content is what matters
+  body = body.replace(/\btimestamps\s*\{([\s\S]*?)\}/g, (_match, inner) => inner);
+
   const allMatches: Array<{ index: number; cmd: string }> = [];
 
   // dir('path') or dir("path") { deleteDir() }
@@ -222,15 +226,16 @@ export function convert(options: ConvertOptions, logger: Logger): void {
     const stageName = hdr[1];
     const block = getBalancedBlock(content, hdr.index!);
     if (block) {
+      const hasTimestampsWrapper = /\btimestamps\s*\{/.test(block.content);
       const commands = convertStageBody(block.content, isWindows);
-      stages.push({ name: stageName, commands });
+      stages.push({ name: stageName, commands, hasTimestampsWrapper });
       logger.log(`Stage '${stageName}': ${commands.length} command(s) extracted`);
       for (const cmd of commands) {
         logger.log(`  -> ${cmd}`);
       }
     } else {
       logger.log(`Stage '${stageName}': failed to parse block`, 'WARN');
-      stages.push({ name: stageName, commands: [] });
+      stages.push({ name: stageName, commands: [], hasTimestampsWrapper: false });
     }
   }
 
@@ -239,6 +244,12 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   // Detect post actions
   const hasEmailNotify = /emailext\s*\(/.test(content);
   const hasPublishHTML = /publishHTML\s*\(/.test(content);
+
+  // Detect Jenkins options
+  const hasTimestamps = /options\s*\{[^}]*timestamps\s*\(\s*\)[^}]*\}/s.test(content);
+  if (hasTimestamps) {
+    logger.log('Jenkins option detected: timestamps() -> adding timestamp echo to each step');
+  }
 
   // Build YAML output
   const lines: string[] = [];
@@ -256,6 +267,11 @@ export function convert(options: ConvertOptions, logger: Logger): void {
 
   lines.push('pipelines:');
   lines.push('  default:');
+
+  // Timestamp echo command: printed at the start of each step's script when timestamps() is detected
+  const tsEcho = isWindows
+    ? 'powershell -Command "Write-Host \'[TIMESTAMP]\' (Get-Date -Format \'yyyy-MM-ddTHH:mm:ssZ\')"'
+    : "echo \"[TIMESTAMP] $(date -u '+%Y-%m-%dT%H:%M:%SZ')\"";
 
   if (options.all) {
     // Merge all stages into a single step
@@ -275,6 +291,10 @@ export function convert(options: ConvertOptions, logger: Logger): void {
       } else {
         lines.push(`          - export ${key}=${val}`);
       }
+    }
+
+    if (hasTimestamps || stages.some((s) => s.hasTimestampsWrapper)) {
+      lines.push(`          - ${tsEcho}`);
     }
 
     for (const stage of stages) {
@@ -315,6 +335,10 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         } else {
           lines.push(`          - export ${key}=${val}`);
         }
+      }
+
+      if (hasTimestamps || stage.hasTimestampsWrapper) {
+        lines.push(`          - ${tsEcho}`);
       }
 
       if (stage.commands.length > 0) {
