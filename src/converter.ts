@@ -2,10 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Logger } from './logger';
 import { JENKINS_TO_BITBUCKET } from './env-map';
+import { plugins } from './plugins';
 
 interface Stage {
   name: string;
   commands: string[];
+  /** Plugin names that are active for this specific stage */
+  activePlugins: Set<string>;
 }
 
 interface BalancedBlock {
@@ -84,6 +87,11 @@ function getBalancedBlock(text: string, startIndex: number): BalancedBlock | nul
  * isWindows is derived from runner labels: any label containing 'windows' -> Windows mode.
  */
 function convertStageBody(body: string, isWindows: boolean): string[] {
+  // Apply plugin body transformations (e.g. unwrap DSL wrappers)
+  for (const plugin of plugins) {
+    body = plugin.transformStageBody(body);
+  }
+
   const allMatches: Array<{ index: number; cmd: string }> = [];
 
   // dir('path') or dir("path") { deleteDir() }
@@ -222,15 +230,18 @@ export function convert(options: ConvertOptions, logger: Logger): void {
     const stageName = hdr[1];
     const block = getBalancedBlock(content, hdr.index!);
     if (block) {
+      const activePlugins = new Set(
+        plugins.filter((p) => p.detectInStage(block.content)).map((p) => p.name)
+      );
       const commands = convertStageBody(block.content, isWindows);
-      stages.push({ name: stageName, commands });
+      stages.push({ name: stageName, commands, activePlugins });
       logger.log(`Stage '${stageName}': ${commands.length} command(s) extracted`);
       for (const cmd of commands) {
         logger.log(`  -> ${cmd}`);
       }
     } else {
       logger.log(`Stage '${stageName}': failed to parse block`, 'WARN');
-      stages.push({ name: stageName, commands: [] });
+      stages.push({ name: stageName, commands: [], activePlugins: new Set() });
     }
   }
 
@@ -239,6 +250,25 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   // Detect post actions
   const hasEmailNotify = /emailext\s*\(/.test(content);
   const hasPublishHTML = /publishHTML\s*\(/.test(content);
+
+  // Detect branch / PR conditions in Jenkinsfile
+  const branchConditionRegex = /when\s*\{[^}]*branch\s+["']([^"']+)["'][^}]*\}/gs;
+  const branchNameSet = new Set<string>();
+  let branchMatch: RegExpExecArray | null;
+  while ((branchMatch = branchConditionRegex.exec(content)) !== null) {
+    branchNameSet.add(branchMatch[1]);
+  }
+  const branchNames = Array.from(branchNameSet);
+  const hasBranchCondition = branchNames.length > 0;
+  const hasPRCondition = /when\s*\{[^}]*changeRequest[^}]*\}/s.test(content);
+
+  // Detect globally active plugins
+  const globalPlugins = new Set(
+    plugins.filter((p) => p.detect(content)).map((p) => p.name)
+  );
+  for (const name of globalPlugins) {
+    logger.log(`Jenkins plugin detected: ${name} -> prepending script lines to each step`);
+  }
 
   // Build YAML output
   const lines: string[] = [];
@@ -274,6 +304,16 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         lines.push(`          - set ${key}=${val}`);
       } else {
         lines.push(`          - export ${key}=${val}`);
+      }
+    }
+
+    // Prepend plugin lines when any stage or global activation applies
+    for (const plugin of plugins) {
+      const active = globalPlugins.has(plugin.name) || stages.some((s) => s.activePlugins.has(plugin.name));
+      if (active) {
+        for (const line of plugin.getPrependLines(isWindows)) {
+          lines.push(`          - ${line}`);
+        }
       }
     }
 
@@ -317,6 +357,15 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         }
       }
 
+      // Prepend plugin lines when globally active or active for this stage
+      for (const plugin of plugins) {
+        if (globalPlugins.has(plugin.name) || stage.activePlugins.has(plugin.name)) {
+          for (const line of plugin.getPrependLines(isWindows)) {
+            lines.push(`          - ${line}`);
+          }
+        }
+      }
+
       if (stage.commands.length > 0) {
         for (const cmd of stage.commands) {
           const cmdLines = cmd.split('\n');
@@ -338,20 +387,27 @@ export function convert(options: ConvertOptions, logger: Logger): void {
     }
   }
 
-  lines.push('  branches:');
-  lines.push('    main:');
-  lines.push('      - step:');
-  lines.push('          name: Main Branch Build');
-  lines.push('          script:');
-  lines.push("            - echo 'Main branch pipeline'");
-  lines.push('');
-  lines.push('  pull-requests:');
-  lines.push("    '**':");
-  lines.push('      - step:');
-  lines.push('          name: PR Validation');
-  lines.push('          script:');
-  lines.push("            - echo 'PR validation pipeline'");
-  lines.push('');
+  if (hasBranchCondition) {
+    lines.push('  branches:');
+    for (const branch of branchNames) {
+      lines.push(`    ${branch}:`);
+      lines.push('      - step:');
+      lines.push(`          name: ${branch} Branch Build`);
+      lines.push('          script:');
+      lines.push(`            - echo '${branch} branch pipeline'`);
+      lines.push('');
+    }
+  }
+
+  if (hasPRCondition) {
+    lines.push('  pull-requests:');
+    lines.push("    '**':");
+    lines.push('      - step:');
+    lines.push('          name: PR Validation');
+    lines.push('          script:');
+    lines.push("            - echo 'PR validation pipeline'");
+    lines.push('');
+  }
 
   if (hasEmailNotify || hasPublishHTML) {
     lines.push('# =============================================================');

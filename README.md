@@ -2,17 +2,17 @@
 [![npm downloads](https://img.shields.io/npm/dm/jen2bit)](https://www.npmjs.com/package/jen2bit)
 [![license](https://img.shields.io/npm/l/jen2bit)](https://www.npmjs.com/package/jen2bit)
 
-### What is jen2bit
+### 1. What is jen2bit
 
-> A CLI for Jenkinsfile to bitbucket-pipeline.yml
+> A CLI Tool for Jenkinsfile to bitbucket-pipelines.yml
 
-### Install
+### 2. Install
 
 ```bash
 npm install -g jen2bit
 ```
 
-### Commands
+### 3. Commands
 
 #### convert
 
@@ -67,7 +67,7 @@ bitbucket-pipelines.yml
 
 ##### descriptions
 
-- Invert bitbucket-pipelines.yml to Jenkinsfile
+- Invert from bitbucket-pipelines.yml to Jenkinsfile
 
 ##### grammars
 
@@ -100,13 +100,16 @@ jen2bit invert bitbucket-pipelines.yml -o MyJenkinsfile
 Jenkinsfile
 ```
 
+### 4. Versioning
+
 ```
 major.minor.patch
 ```
-- minor : Add or Delete commands
-- patch : Edit commands 
+- major : Delete or Rename commands (Compatibility Ignored)
+- minor : Add new commands
+- patch : Edit commands
 
-### Dependencies
+### 5. Dependencies
 
 | package | description |
 |---------|-------------|
