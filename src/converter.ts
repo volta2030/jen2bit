@@ -4,12 +4,20 @@ import { Logger } from './logger';
 import { JENKINS_TO_BITBUCKET } from './env-map';
 import { plugins } from './plugins';
 
-interface Stage {
+interface StepItem {
+  kind: 'step';
   name: string;
   commands: string[];
-  /** Plugin names that are active for this specific stage */
   activePlugins: Set<string>;
 }
+
+interface ParallelItem {
+  kind: 'parallel';
+  name: string;
+  steps: StepItem[];
+}
+
+type PipelineItem = StepItem | ParallelItem;
 
 interface BalancedBlock {
   content: string;
@@ -179,8 +187,58 @@ function convertStageBody(body: string, isWindows: boolean): string[] {
     }
   }
 
+  // Jenkins echo 'text' or echo "text" — preserve original quote style
+  const echoPattern = /\becho\s+(['"])((?:(?!\1)[^\\]|\\.)*)\1/g;
+  for (const m of body.matchAll(echoPattern)) {
+    const q = m[1];
+    allMatches.push({ index: m.index!, cmd: `echo ${q}${m[2]}${q}` });
+  }
+
   allMatches.sort((a, b) => a.index - b.index);
   return allMatches.map((m) => mapEnvVars(m.cmd, isWindows));
+}
+
+/**
+ * Returns the direct child stage name+block pairs within a stages/parallel body.
+ * Only matches stage() declarations at depth 0 of the given body string.
+ */
+function findDirectChildStages(
+  body: string
+): Array<{ name: string; blockContent: string }> {
+  const results: Array<{ name: string; blockContent: string }> = [];
+  const pattern = /stage\s*\(\s*["']([^"']+)["']\s*\)/g;
+
+  for (const m of body.matchAll(pattern)) {
+    // Count brace depth at this match position
+    let depth = 0;
+    for (let i = 0; i < m.index!; i++) {
+      if (body[i] === '{') depth++;
+      else if (body[i] === '}') depth--;
+    }
+    if (depth === 0) {
+      const block = getBalancedBlock(body, m.index!);
+      if (block) results.push({ name: m[1], blockContent: block.content });
+    }
+  }
+  return results;
+}
+
+/**
+ * Builds a StepItem from a stage name and its block content.
+ */
+function buildStep(
+  name: string,
+  blockContent: string,
+  isWindows: boolean,
+  logger: Logger
+): StepItem {
+  const activePlugins = new Set(
+    plugins.filter((p) => p.detectInStage(blockContent)).map((p) => p.name)
+  );
+  const commands = convertStageBody(blockContent, isWindows);
+  logger.log(`Stage '${name}': ${commands.length} command(s) extracted`);
+  for (const cmd of commands) logger.log(`  -> ${cmd}`);
+  return { kind: 'step', name, commands, activePlugins };
 }
 
 /**
@@ -223,29 +281,34 @@ export function convert(options: ConvertOptions, logger: Logger): void {
     logger.log(`Agent label: ${agentLabel}`);
   }
 
-  // Extract stages using balanced brace matching (single or double quotes)
-  const stages: Stage[] = [];
-  const stageHeaderPattern = /stage\s*\(\s*["']([^"']+)["']\s*\)/g;
-  for (const hdr of content.matchAll(stageHeaderPattern)) {
-    const stageName = hdr[1];
-    const block = getBalancedBlock(content, hdr.index!);
-    if (block) {
-      const activePlugins = new Set(
-        plugins.filter((p) => p.detectInStage(block.content)).map((p) => p.name)
-      );
-      const commands = convertStageBody(block.content, isWindows);
-      stages.push({ name: stageName, commands, activePlugins });
-      logger.log(`Stage '${stageName}': ${commands.length} command(s) extracted`);
-      for (const cmd of commands) {
-        logger.log(`  -> ${cmd}`);
+  // Extract top-level stages from within the main stages {} block
+  const items: PipelineItem[] = [];
+  const stagesBlockMatch = content.search(/\bstages\s*\{/);
+  const stagesBlock = stagesBlockMatch >= 0 ? getBalancedBlock(content, stagesBlockMatch) : null;
+
+  if (stagesBlock) {
+    for (const { name, blockContent } of findDirectChildStages(stagesBlock.content)) {
+      // Check if this stage contains a parallel {} block
+      const parallelIdx = blockContent.search(/\bparallel\s*\{/);
+      if (parallelIdx >= 0) {
+        const parallelBlock = getBalancedBlock(blockContent, parallelIdx);
+        if (parallelBlock) {
+          const parallelChildren = findDirectChildStages(parallelBlock.content);
+          const childSteps = parallelChildren.map(({ name: cName, blockContent: cBody }) =>
+            buildStep(cName, cBody, isWindows, logger)
+          );
+          logger.log(`Stage '${name}': parallel with ${childSteps.length} sub-stage(s)`);
+          items.push({ kind: 'parallel', name, steps: childSteps });
+          continue;
+        }
       }
-    } else {
-      logger.log(`Stage '${stageName}': failed to parse block`, 'WARN');
-      stages.push({ name: stageName, commands: [], activePlugins: new Set() });
+      items.push(buildStep(name, blockContent, isWindows, logger));
     }
+  } else {
+    logger.log('Could not locate stages {} block', 'WARN');
   }
 
-  logger.log(`Stages found: ${stages.length}`);
+  logger.log(`Stages found: ${items.length}`);
 
   // Detect post actions
   const hasEmailNotify = /emailext\s*\(/.test(content);
@@ -270,6 +333,34 @@ export function convert(options: ConvertOptions, logger: Logger): void {
     logger.log(`Jenkins plugin detected: ${name} -> prepending script lines to each step`);
   }
 
+  // Helper: emit script lines for a single StepItem
+  function emitStepScript(step: StepItem, indent: string): void {
+    for (const [key, val] of Object.entries(envVars)) {
+      lines.push(`${indent}- ${isWindows ? 'set' : 'export'} ${key}=${val}`);
+    }
+    for (const plugin of plugins) {
+      if (globalPlugins.has(plugin.name) || step.activePlugins.has(plugin.name)) {
+        for (const l of plugin.getPrependLines(isWindows)) lines.push(`${indent}- ${l}`);
+      }
+    }
+    if (step.commands.length > 0) {
+      for (const cmd of step.commands) {
+        const cmdLines = cmd.split('\n');
+        if (cmdLines.length === 1) {
+          lines.push(`${indent}- ${cmd}`);
+        } else {
+          lines.push(`${indent}- |`);
+          for (const l of cmdLines) {
+            const t = l.trim();
+            if (t) lines.push(`${indent}  ${t}`);
+          }
+        }
+      }
+    } else {
+      lines.push(`${indent}- echo 'TODO: Add commands for ${step.name}'`);
+    }
+  }
+
   // Build YAML output
   const lines: string[] = [];
   const dateStr = startTime.toISOString().replace('T', ' ').slice(0, 19);
@@ -287,103 +378,77 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   lines.push('pipelines:');
   lines.push('  default:');
 
+  // Collect all StepItems (flattened, for --all mode and plugin detection)
+  const allSteps: StepItem[] = items.flatMap((item) =>
+    item.kind === 'parallel' ? item.steps : [item]
+  );
+
   if (options.all) {
-    // Merge all stages into a single step
+    // Merge all stages into a single step (flatten parallel)
     lines.push('    - step:');
     lines.push('        name: All Stages');
     if (runners) {
       lines.push('        runs-on:');
-      for (const r of runners) {
-        lines.push(`          - ${r}`);
-      }
+      for (const r of runners) lines.push(`          - ${r}`);
     }
     lines.push('        script:');
 
     for (const [key, val] of Object.entries(envVars)) {
-      if (isWindows) {
-        lines.push(`          - set ${key}=${val}`);
-      } else {
-        lines.push(`          - export ${key}=${val}`);
-      }
+      lines.push(`          - ${isWindows ? 'set' : 'export'} ${key}=${val}`);
     }
 
-    // Prepend plugin lines when any stage or global activation applies
     for (const plugin of plugins) {
-      const active = globalPlugins.has(plugin.name) || stages.some((s) => s.activePlugins.has(plugin.name));
+      const active = globalPlugins.has(plugin.name) || allSteps.some((s) => s.activePlugins.has(plugin.name));
       if (active) {
-        for (const line of plugin.getPrependLines(isWindows)) {
-          lines.push(`          - ${line}`);
-        }
+        for (const l of plugin.getPrependLines(isWindows)) lines.push(`          - ${l}`);
       }
     }
 
-    for (const stage of stages) {
-      lines.push(`          - echo '--- Stage: ${stage.name} ---'`);
-      if (stage.commands.length > 0) {
-        for (const cmd of stage.commands) {
-          const cmdLines = cmd.split('\n');
-          if (cmdLines.length === 1) {
-            lines.push(`          - ${cmd}`);
-          } else {
-            lines.push('          - |');
-            for (const line of cmdLines) {
-              const trimmed = line.trim();
-              if (trimmed) lines.push(`            ${trimmed}`);
-            }
+    for (const step of allSteps) {
+      lines.push(`          - echo '--- Stage: ${step.name} ---'`);
+      for (const cmd of step.commands) {
+        const cmdLines = cmd.split('\n');
+        if (cmdLines.length === 1) {
+          lines.push(`          - ${cmd}`);
+        } else {
+          lines.push('          - |');
+          for (const l of cmdLines) {
+            const t = l.trim();
+            if (t) lines.push(`            ${t}`);
           }
         }
-      } else {
-        lines.push(`          - echo 'TODO: Add commands for ${stage.name}'`);
+      }
+      if (step.commands.length === 0) {
+        lines.push(`          - echo 'TODO: Add commands for ${step.name}'`);
       }
     }
     lines.push('');
   } else {
-    for (const stage of stages) {
-      lines.push('    - step:');
-      lines.push(`        name: ${stage.name}`);
-      if (runners) {
-        lines.push('        runs-on:');
-        for (const r of runners) {
-          lines.push(`          - ${r}`);
-        }
-      }
-      lines.push('        script:');
-
-      for (const [key, val] of Object.entries(envVars)) {
-        if (isWindows) {
-          lines.push(`          - set ${key}=${val}`);
-        } else {
-          lines.push(`          - export ${key}=${val}`);
-        }
-      }
-
-      // Prepend plugin lines when globally active or active for this stage
-      for (const plugin of plugins) {
-        if (globalPlugins.has(plugin.name) || stage.activePlugins.has(plugin.name)) {
-          for (const line of plugin.getPrependLines(isWindows)) {
-            lines.push(`          - ${line}`);
+    for (const item of items) {
+      if (item.kind === 'parallel') {
+        lines.push('    - parallel:');
+        for (const step of item.steps) {
+          lines.push('        - step:');
+          lines.push(`            name: ${step.name}`);
+          if (runners) {
+            lines.push('            runs-on:');
+            for (const r of runners) lines.push(`              - ${r}`);
           }
+          lines.push('            script:');
+          emitStepScript(step, '              ');
         }
-      }
-
-      if (stage.commands.length > 0) {
-        for (const cmd of stage.commands) {
-          const cmdLines = cmd.split('\n');
-          if (cmdLines.length === 1) {
-            lines.push(`          - ${cmd}`);
-          } else {
-            lines.push('          - |');
-            for (const line of cmdLines) {
-              const trimmed = line.trim();
-              if (trimmed) lines.push(`            ${trimmed}`);
-            }
-          }
-        }
+        lines.push('');
       } else {
-        lines.push(`          - echo 'TODO: Add commands for ${stage.name}'`);
+        lines.push('    - step:');
+        lines.push(`        name: ${item.name}`);
+        if (runners) {
+          lines.push('        runs-on:');
+          for (const r of runners) lines.push(`          - ${r}`);
+        }
+        lines.push('        script:');
+        emitStepScript(item, '          ');
+        lines.push('');
       }
-
-      lines.push('');
     }
   }
 
