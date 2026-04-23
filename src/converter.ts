@@ -187,11 +187,108 @@ function convertStageBody(body: string, isWindows: boolean): string[] {
     }
   }
 
-  // Jenkins echo 'text' or echo "text" — preserve original quote style
-  const echoPattern = /\becho\s+(['"])((?:(?!\1)[^\\]|\\.)*)\1/g;
-  for (const m of body.matchAll(echoPattern)) {
-    const q = m[1];
-    allMatches.push({ index: m.index!, cmd: `echo ${q}${m[2]}${q}` });
+  // Jenkins echo 'text' or echo "text" — preserve original quote style.
+  // Only match standalone echo steps outside other quoted DSL arguments.
+  const extractStandaloneEchoMatches = (
+    source: string
+  ): Array<{ index: number; cmd: string }> => {
+    const matches: Array<{ index: number; cmd: string }> = [];
+    let inSingle = false;
+    let inDouble = false;
+    let escapeNext = false;
+    let statementStart = true;
+
+    for (let i = 0; i < source.length; i++) {
+      const ch = source[i];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+
+      if (inSingle) {
+        if (ch === '\\') {
+          escapeNext = true;
+        } else if (ch === "'") {
+          inSingle = false;
+        }
+        continue;
+      }
+
+      if (inDouble) {
+        if (ch === '\\') {
+          escapeNext = true;
+        } else if (ch === '"') {
+          inDouble = false;
+        }
+        continue;
+      }
+
+      if (ch === "'") {
+        inSingle = true;
+        statementStart = false;
+        continue;
+      }
+
+      if (ch === '"') {
+        inDouble = true;
+        statementStart = false;
+        continue;
+      }
+
+      if (ch === '\n' || ch === ';' || ch === '{' || ch === '}') {
+        statementStart = true;
+        continue;
+      }
+
+      if (/\s/.test(ch)) {
+        continue;
+      }
+
+      if (
+        statementStart &&
+        source.startsWith('echo', i) &&
+        (i + 4 === source.length || /\s/.test(source[i + 4]))
+      ) {
+        let j = i + 4;
+        while (j < source.length && /\s/.test(source[j])) j++;
+
+        const quote = source[j];
+        if (quote === "'" || quote === '"') {
+          const contentStart = j + 1;
+          let k = contentStart;
+          let escaped = false;
+
+          while (k < source.length) {
+            const current = source[k];
+            if (escaped) {
+              escaped = false;
+            } else if (current === '\\') {
+              escaped = true;
+            } else if (current === quote) {
+              matches.push({
+                index: i,
+                cmd: `echo ${quote}${source.slice(contentStart, k)}${quote}`,
+              });
+              i = k;
+              break;
+            }
+            k++;
+          }
+        }
+
+        statementStart = false;
+        continue;
+      }
+
+      statementStart = false;
+    }
+
+    return matches;
+  };
+
+  for (const m of extractStandaloneEchoMatches(body)) {
+    allMatches.push(m);
   }
 
   allMatches.sort((a, b) => a.index - b.index);
