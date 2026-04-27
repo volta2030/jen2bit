@@ -1,0 +1,41 @@
+pipeline {
+  agent any
+  stages {
+    stage ('Hello world 1') {
+      steps {
+        echo "Hello world!!"
+      }
+      post {
+        always {
+          echo 'POST: Hello world 1'
+        }
+      }
+    }
+    stage ('Error test') {
+      steps {
+        error "ERROR!!!!"
+        echo "Error after..."
+      }
+      post {
+        always {
+          echo 'POST: Hello world 1'
+        }
+      }
+    }
+    stage ('Hello world 2') {
+      steps {
+        echo "Hello world!! 2"
+      }
+      post {
+        always {
+          echo 'POST: Hello world 2'
+        }
+      }
+    }
+  }
+  post {
+    always {
+      echo 'POST: Last Post~~'
+    }
+  }
+}
