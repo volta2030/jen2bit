@@ -3,12 +3,15 @@ import * as path from 'path';
 import { Logger } from './logger';
 import { JENKINS_TO_BITBUCKET } from './env-map';
 import { plugins } from './plugins';
+import { getBalancedBlock } from './built-in-steps/utils';
+import { PostActions, extractPostActions, stripPostBlock, emitAfterScript } from './built-in-steps/post';
 
 interface StepItem {
   kind: 'step';
   name: string;
   commands: string[];
   activePlugins: Set<string>;
+  postActions: PostActions;
 }
 
 interface ParallelItem {
@@ -18,11 +21,6 @@ interface ParallelItem {
 }
 
 type PipelineItem = StepItem | ParallelItem;
-
-interface BalancedBlock {
-  content: string;
-  endIndex: number;
-}
 
 export interface ConvertOptions {
   input: string;
@@ -63,29 +61,6 @@ function resolveEnvRef(jenkinsVar: string, isWindows: boolean): string {
   if (mapped === undefined) return isWindows ? `$env:${jenkinsVar}` : `$${jenkinsVar}`;
   if (mapped === '') return `# [no Bitbucket equivalent for ${jenkinsVar}]`;
   return isWindows ? `$env:${mapped}` : `$${mapped}`;
-}
-
-/**
- * Finds the content inside balanced braces starting from the first '{' at or after startIndex.
- */
-function getBalancedBlock(text: string, startIndex: number): BalancedBlock | null {
-  const braceStart = text.indexOf('{', startIndex);
-  if (braceStart < 0) return null;
-
-  let depth = 0;
-  for (let i = braceStart; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) {
-        return {
-          content: text.substring(braceStart + 1, i),
-          endIndex: i,
-        };
-      }
-    }
-  }
-  return null;
 }
 
 /**
@@ -150,14 +125,16 @@ function convertStageBody(body: string, isWindows: boolean): string[] {
   }
 
   // sh 'command' or sh "command" (single line) — Linux/Unix only
-  const shPattern = /sh\s+["']([^"'\n]+)["']/g;
+  // Uses backreference to allow the opposite quote type inside the string.
+  const shPattern = /sh\s+('([^'\n]*)'|"([^"\n]*)")/g;
   for (const m of body.matchAll(shPattern)) {
+    const cmd = m[2] ?? m[3];
     if (!isWindows) {
-      allMatches.push({ index: m.index!, cmd: m[1] });
+      allMatches.push({ index: m.index!, cmd });
     } else {
       allMatches.push({
         index: m.index!,
-        cmd: `# [skipped: sh is Linux-only] ${m[1]}`,
+        cmd: `# [skipped: sh is Linux-only] ${cmd}`,
       });
     }
   }
@@ -332,10 +309,12 @@ function buildStep(
   const activePlugins = new Set(
     plugins.filter((p) => p.detectInStage(blockContent)).map((p) => p.name)
   );
-  const commands = convertStageBody(blockContent, isWindows);
+  const postActions = extractPostActions(blockContent, isWindows, convertStageBody);
+  const bodyForCommands = stripPostBlock(blockContent);
+  const commands = convertStageBody(bodyForCommands, isWindows);
   logger.log(`Stage '${name}': ${commands.length} command(s) extracted`);
   for (const cmd of commands) logger.log(`  -> ${cmd}`);
-  return { kind: 'step', name, commands, activePlugins };
+  return { kind: 'step', name, commands, activePlugins, postActions };
 }
 
 /**
@@ -408,8 +387,44 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   logger.log(`Stages found: ${items.length}`);
 
   // Detect post actions
-  const hasEmailNotify = /emailext\s*\(/.test(content);
+  const hasEmailNotify = /emailext\s*\(|mail\s+to\s*:/.test(content);
   const hasPublishHTML = /publishHTML\s*\(/.test(content);
+
+  // Extract pipeline-level post block (outside the stages block)
+  let pipelinePostActions: PostActions = { always: [], success: [], failure: [] };
+  if (stagesBlock) {
+    const afterStages = content.substring(stagesBlock.endIndex + 1);
+    if (/\bpost\s*\{/.test(afterStages)) {
+      pipelinePostActions = extractPostActions(afterStages, isWindows, convertStageBody);
+      const hasPipelinePost =
+        pipelinePostActions.always.length > 0 ||
+        pipelinePostActions.success.length > 0 ||
+        pipelinePostActions.failure.length > 0;
+      if (hasPipelinePost) logger.log('Pipeline-level post block detected');
+    }
+  }
+
+  // Convert pipeline-level post into a dedicated "Post" step appended to items.
+  // always -> script:, success/failure -> after-script: with $BITBUCKET_EXIT_CODE conditions.
+  const hasPipelinePost =
+    pipelinePostActions.always.length > 0 ||
+    pipelinePostActions.success.length > 0 ||
+    pipelinePostActions.failure.length > 0;
+  if (hasPipelinePost) {
+    const postStep: StepItem = {
+      kind: 'step',
+      name: 'Post',
+      commands: pipelinePostActions.always,
+      activePlugins: new Set(),
+      postActions: {
+        always: [],
+        success: pipelinePostActions.success,
+        failure: pipelinePostActions.failure,
+      },
+    };
+    items.push(postStep);
+    logger.log("Pipeline-level post block -> added as 'Post' step");
+  }
 
   // Detect branch / PR conditions in Jenkinsfile
   const branchConditionRegex = /when\s*\{[^}]*branch\s+["']([^"']+)["'][^}]*\}/gs;
@@ -533,6 +548,7 @@ export function convert(options: ConvertOptions, logger: Logger): void {
           }
           lines.push('            script:');
           emitStepScript(step, '              ');
+          emitAfterScript(step.postActions, lines, '              ', isWindows);
         }
         lines.push('');
       } else {
@@ -544,6 +560,7 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         }
         lines.push('        script:');
         emitStepScript(item, '          ');
+        emitAfterScript(item.postActions, lines, '          ', isWindows);
         lines.push('');
       }
     }

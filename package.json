@@ -1,6 +1,6 @@
 {
   "name": "jen2bit",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "CLI tool to convert Jenkinsfile to Bitbucket Pipelines YAML",
   "main": "dist/cli.js",
   "bin": {
