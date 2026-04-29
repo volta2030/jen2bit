@@ -3,12 +3,8 @@ import * as path from 'path';
 import { Logger } from './logger';
 import { JENKINS_TO_BITBUCKET } from './env-map';
 import { plugins } from './plugins';
-
-interface PostActions {
-  always: string[];
-  success: string[];
-  failure: string[];
-}
+import { getBalancedBlock } from './built-in-steps/utils';
+import { PostActions, extractPostActions, stripPostBlock, emitAfterScript } from './built-in-steps/post';
 
 interface StepItem {
   kind: 'step';
@@ -25,11 +21,6 @@ interface ParallelItem {
 }
 
 type PipelineItem = StepItem | ParallelItem;
-
-interface BalancedBlock {
-  content: string;
-  endIndex: number;
-}
 
 export interface ConvertOptions {
   input: string;
@@ -70,29 +61,6 @@ function resolveEnvRef(jenkinsVar: string, isWindows: boolean): string {
   if (mapped === undefined) return isWindows ? `$env:${jenkinsVar}` : `$${jenkinsVar}`;
   if (mapped === '') return `# [no Bitbucket equivalent for ${jenkinsVar}]`;
   return isWindows ? `$env:${mapped}` : `$${mapped}`;
-}
-
-/**
- * Finds the content inside balanced braces starting from the first '{' at or after startIndex.
- */
-function getBalancedBlock(text: string, startIndex: number): BalancedBlock | null {
-  const braceStart = text.indexOf('{', startIndex);
-  if (braceStart < 0) return null;
-
-  let depth = 0;
-  for (let i = braceStart; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}') {
-      depth--;
-      if (depth === 0) {
-        return {
-          content: text.substring(braceStart + 1, i),
-          endIndex: i,
-        };
-      }
-    }
-  }
-  return null;
 }
 
 /**
@@ -305,28 +273,6 @@ function convertStageBody(body: string, isWindows: boolean): string[] {
 }
 
 /**
- * Extracts shell commands from Jenkins post { always/success/failure } blocks.
- */
-function extractPostActions(blockContent: string, isWindows: boolean): PostActions {
-  const result: PostActions = { always: [], success: [], failure: [] };
-  const postIdx = blockContent.search(/\bpost\s*\{/);
-  if (postIdx < 0) return result;
-  const postBlock = getBalancedBlock(blockContent, postIdx);
-  if (!postBlock) return result;
-  for (const [key, pattern] of [
-    ['always',  /\balways\s*\{/],
-    ['success', /\bsuccess\s*\{/],
-    ['failure', /\bfailure\s*\{/],
-  ] as Array<[keyof PostActions, RegExp]>) {
-    const idx = postBlock.content.search(pattern);
-    if (idx < 0) continue;
-    const block = getBalancedBlock(postBlock.content, idx);
-    if (block) result[key] = convertStageBody(block.content, isWindows);
-  }
-  return result;
-}
-
-/**
  * Returns the direct child stage name+block pairs within a stages/parallel body.
  * Only matches stage() declarations at depth 0 of the given body string.
  */
@@ -363,16 +309,8 @@ function buildStep(
   const activePlugins = new Set(
     plugins.filter((p) => p.detectInStage(blockContent)).map((p) => p.name)
   );
-  const postActions = extractPostActions(blockContent, isWindows);
-  // Strip post block before extracting commands so post commands don't leak into script:
-  const postIdx = blockContent.search(/\bpost\s*\{/);
-  let bodyForCommands = blockContent;
-  if (postIdx >= 0) {
-    const postBlock = getBalancedBlock(blockContent, postIdx);
-    if (postBlock) {
-      bodyForCommands = blockContent.substring(0, postIdx) + blockContent.substring(postBlock.endIndex + 1);
-    }
-  }
+  const postActions = extractPostActions(blockContent, isWindows, convertStageBody);
+  const bodyForCommands = stripPostBlock(blockContent);
   const commands = convertStageBody(bodyForCommands, isWindows);
   logger.log(`Stage '${name}': ${commands.length} command(s) extracted`);
   for (const cmd of commands) logger.log(`  -> ${cmd}`);
@@ -457,7 +395,7 @@ export function convert(options: ConvertOptions, logger: Logger): void {
   if (stagesBlock) {
     const afterStages = content.substring(stagesBlock.endIndex + 1);
     if (/\bpost\s*\{/.test(afterStages)) {
-      pipelinePostActions = extractPostActions(afterStages, isWindows);
+      pipelinePostActions = extractPostActions(afterStages, isWindows, convertStageBody);
       const hasPipelinePost =
         pipelinePostActions.always.length > 0 ||
         pipelinePostActions.success.length > 0 ||
@@ -532,35 +470,6 @@ export function convert(options: ConvertOptions, logger: Logger): void {
       }
     } else {
       lines.push(`${indent}- echo 'TODO: Add commands for ${step.name}'`);
-    }
-  }
-
-  // Helper: emit after-script for a StepItem's post actions
-  function emitAfterScript(postActions: PostActions, scriptIndent: string): void {
-    const hasAny =
-      postActions.always.length > 0 ||
-      postActions.success.length > 0 ||
-      postActions.failure.length > 0;
-    if (!hasAny) return;
-    const keyIndent = scriptIndent.slice(0, -2);
-    lines.push(`${keyIndent}after-script:`);
-    for (const cmd of postActions.always) {
-      lines.push(`${scriptIndent}- ${cmd}`);
-    }
-    if (isWindows) {
-      for (const cmd of postActions.success) {
-        lines.push(`${scriptIndent}- if ($env:BITBUCKET_EXIT_CODE -eq 0) { ${cmd} }`);
-      }
-      for (const cmd of postActions.failure) {
-        lines.push(`${scriptIndent}- if ($env:BITBUCKET_EXIT_CODE -ne 0) { ${cmd} }`);
-      }
-    } else {
-      for (const cmd of postActions.success) {
-        lines.push(`${scriptIndent}- if [ $BITBUCKET_EXIT_CODE -eq 0 ]; then ${cmd}; fi`);
-      }
-      for (const cmd of postActions.failure) {
-        lines.push(`${scriptIndent}- if [ $BITBUCKET_EXIT_CODE -ne 0 ]; then ${cmd}; fi`);
-      }
     }
   }
 
@@ -639,7 +548,7 @@ export function convert(options: ConvertOptions, logger: Logger): void {
           }
           lines.push('            script:');
           emitStepScript(step, '              ');
-          emitAfterScript(step.postActions, '              ');
+          emitAfterScript(step.postActions, lines, '              ', isWindows);
         }
         lines.push('');
       } else {
@@ -651,7 +560,7 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         }
         lines.push('        script:');
         emitStepScript(item, '          ');
-        emitAfterScript(item.postActions, '          ');
+        emitAfterScript(item.postActions, lines, '          ', isWindows);
         lines.push('');
       }
     }
