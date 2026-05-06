@@ -43,12 +43,13 @@ const timeoutPlugin: JenkinsPlugin = {
     );
     if (!m) return undefined;
     const value = parseInt(m[1], 10);
+    if (value <= 0) return undefined;
     const unit = m[2].toUpperCase();
     switch (unit) {
       case 'SECONDS': return Math.max(1, Math.ceil(value / 60));
-      case 'MINUTES': return value;
-      case 'HOURS':   return value * 60;
-      default:        return value; // treat unknown units as minutes
+      case 'MINUTES': return Math.max(1, value);
+      case 'HOURS':   return Math.max(1, value * 60);
+      default:        return Math.max(1, value); // treat unknown units as minutes
     }
   },
 };
