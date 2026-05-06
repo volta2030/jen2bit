@@ -24,4 +24,10 @@ export interface JenkinsPlugin {
    * Only called when detect() or detectInStage() returned true for the step.
    */
   getPrependLines(isWindows: boolean): string[];
+
+  /**
+   * Return the step timeout in minutes to emit as `max-time:` in Bitbucket Pipelines.
+   * Return undefined if this plugin does not apply a timeout to the given stage content.
+   */
+  getMaxTime?(stageContent: string): number | undefined;
 }

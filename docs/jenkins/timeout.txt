@@ -1,0 +1,56 @@
+Jenkins Pipeline: timeout() option
+===================================
+
+Source: https://www.jenkins.io/doc/book/pipeline/syntax/#options
+
+The `timeout` option enforces a time limit on a stage or the entire pipeline.
+If the allotted time is exceeded, Jenkins aborts the build with a ABORTED status.
+
+Syntax
+------
+
+Stage-level (inside `options {}` block):
+
+    stage('Example') {
+        options {
+            timeout(time: 1, unit: 'HOURS')
+        }
+        steps {
+            // ...
+        }
+    }
+
+Pipeline-level (inside `pipeline > options {}` block):
+
+    pipeline {
+        options {
+            timeout(time: 30, unit: 'MINUTES')
+        }
+        // ...
+    }
+
+Supported time units
+--------------------
+
+    SECONDS   — number of seconds
+    MINUTES   — number of minutes
+    HOURS     — number of hours
+
+jen2bit conversion
+------------------
+
+Jenkins `timeout(time: N, unit: 'UNIT')` is converted to the Bitbucket Pipelines
+`max-time` step property (in minutes).
+
+Conversion table:
+
+    SECONDS  ->  ceil(N / 60) minutes  (minimum 1 minute)
+    MINUTES  ->  N minutes
+    HOURS    ->  N * 60 minutes
+
+Example:
+
+    Jenkins:   timeout(time: 1, unit: 'HOURS')
+    Bitbucket: max-time: 60
+
+See also: docs/bitbucket/max-time.txt
