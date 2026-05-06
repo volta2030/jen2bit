@@ -1,5 +1,6 @@
 import { JenkinsPlugin } from './types';
 import timestamperPlugin from './timestamper';
+import timeoutPlugin from './timeout';
 
 /**
  * All registered Jenkins plugin converters.
@@ -8,4 +9,5 @@ import timestamperPlugin from './timestamper';
  */
 export const plugins: JenkinsPlugin[] = [
   timestamperPlugin,
+  timeoutPlugin,
 ];

@@ -1,0 +1,56 @@
+Bitbucket Pipelines: max-time
+==============================
+
+Source: https://support.atlassian.com/bitbucket-cloud/docs/configure-bitbucket-pipelinesyml/
+
+The `max-time` property sets the maximum time (in minutes) a step is allowed to run.
+If the step exceeds this limit, the pipeline fails with a timeout error.
+
+Syntax
+------
+
+    - step:
+        name: Example
+        max-time: 60     # minutes
+        script:
+          - echo 'Hello World'
+
+Constraints
+-----------
+
+- Value must be a positive integer (minutes).
+- Minimum: 1 minute.
+- Maximum: 120 minutes (2 hours) for Bitbucket Cloud free plans;
+           unlimited for premium / self-hosted runners.
+- Applies per step; there is no pipeline-level timeout field.
+
+jen2bit conversion
+------------------
+
+Jenkins `timeout(time: N, unit: 'UNIT')` found inside a stage `options {}` block
+is mapped to `max-time` on the corresponding Bitbucket Pipelines step.
+
+Unit conversion:
+
+    SECONDS  ->  ceil(N / 60) minutes  (minimum 1 minute)
+    MINUTES  ->  N minutes
+    HOURS    ->  N * 60 minutes
+
+Example:
+
+    Jenkins:
+        stage('Example') {
+            options {
+                timeout(time: 1, unit: 'HOURS')
+            }
+            steps { echo 'Hello World' }
+        }
+
+    Bitbucket:
+        - step:
+            name: Example
+            max-time: 60
+            script:
+              - echo 'Hello World'
+
+See also: docs/jenkins/timeout.txt

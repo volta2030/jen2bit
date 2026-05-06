@@ -12,6 +12,7 @@ interface StepItem {
   commands: string[];
   activePlugins: Set<string>;
   postActions: PostActions;
+  maxTime?: number;
 }
 
 interface ParallelItem {
@@ -314,7 +315,20 @@ function buildStep(
   const commands = convertStageBody(bodyForCommands, isWindows);
   logger.log(`Stage '${name}': ${commands.length} command(s) extracted`);
   for (const cmd of commands) logger.log(`  -> ${cmd}`);
-  return { kind: 'step', name, commands, activePlugins, postActions };
+
+  // Collect the minimum timeout (in minutes) from all plugins that support it
+  let maxTime: number | undefined;
+  for (const plugin of plugins) {
+    if (plugin.getMaxTime) {
+      const t = plugin.getMaxTime(blockContent);
+      if (t !== undefined) {
+        maxTime = maxTime === undefined ? t : Math.min(maxTime, t);
+      }
+    }
+  }
+  if (maxTime !== undefined) logger.log(`Stage '${name}': timeout -> max-time: ${maxTime} minutes`);
+
+  return { kind: 'step', name, commands, activePlugins, postActions, maxTime };
 }
 
 /**
@@ -546,6 +560,9 @@ export function convert(options: ConvertOptions, logger: Logger): void {
             lines.push('            runs-on:');
             for (const r of runners) lines.push(`              - ${r}`);
           }
+          if (step.maxTime !== undefined) {
+            lines.push(`            max-time: ${step.maxTime}`);
+          }
           lines.push('            script:');
           emitStepScript(step, '              ');
           emitAfterScript(step.postActions, lines, '              ', isWindows);
@@ -557,6 +574,9 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         if (runners) {
           lines.push('        runs-on:');
           for (const r of runners) lines.push(`          - ${r}`);
+        }
+        if (item.maxTime !== undefined) {
+          lines.push(`        max-time: ${item.maxTime}`);
         }
         lines.push('        script:');
         emitStepScript(item, '          ');
