@@ -4,7 +4,7 @@ Jenkins Pipeline: timeout() option
 Source: https://www.jenkins.io/doc/book/pipeline/syntax/#options
 
 The `timeout` option enforces a time limit on a stage or the entire pipeline.
-If the allotted time is exceeded, Jenkins aborts the build with a ABORTED status.
+If the allotted time is exceeded, Jenkins aborts the build with an ABORTED status.
 
 Syntax
 ------
