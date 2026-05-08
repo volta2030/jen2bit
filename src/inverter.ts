@@ -47,7 +47,7 @@ function invertCommand(cmd: string, isWindows: boolean): string | null {
   if (/^#\s*\[no Bitbucket equivalent/.test(cmd)) return null;
 
   // Skip auto-generated TODO comments
-  if (/^echo 'TODO: Add commands/.test(cmd)) return null;
+  if (/^echo 'TODO Add commands/.test(cmd)) return null;
 
   // Reverse env var references
   cmd = reverseEnvVars(cmd, isWindows);

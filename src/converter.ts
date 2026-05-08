@@ -483,7 +483,7 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         }
       }
     } else {
-      lines.push(`${indent}- echo 'TODO: Add commands for ${step.name}'`);
+      lines.push(`${indent}- echo 'TODO Add commands for ${step.name}'`);
     }
   }
 
@@ -545,7 +545,7 @@ export function convert(options: ConvertOptions, logger: Logger): void {
         }
       }
       if (step.commands.length === 0) {
-        lines.push(`          - echo 'TODO: Add commands for ${step.name}'`);
+        lines.push(`          - echo 'TODO Add commands for ${step.name}'`);
       }
     }
     lines.push('');
